@@ -49,63 +49,92 @@ const claimKeys = new Map();
 const bot = new Bot(process.env.TELEGRAM_BOT_TOKEN);
 bot.catch((err) => console.error('Ошибка бота:', err.error || err));
 
+// Логирование всех входящих обновлений
 bot.use(async (ctx, next) => {
     console.log('Получено обновление:', JSON.stringify(ctx.update, null, 2));
     await next();
 });
 
-bot.command('start', async (ctx) => {
-    await ctx.reply(
-        '👋 Я Bot DiRo. Сделай ДВА простых ШАГА.\n\n' +
-        'ШАГ 1. Добавь меня в администраторы твоего канала/чата, и я буду автоматически отслеживать посты и реакции!\n' +
-        'ШАГ 2. В своём(ей) канале/группе привяжи кошелёк командой:\n\n' +
-        '/wallet 0xТВОЙ_АДРЕС'
-    );
-});
+// ---------- Универсальный обработчик команд (поддерживает каналы) ----------
+bot.use(async (ctx, next) => {
+    const msg = ctx.message ?? ctx.channelPost;
+    if (!msg || !msg.text || !msg.entities) return next();
 
-// ---------- Команда /wallet с поддержкой каналов ----------
-bot.command('wallet', async (ctx) => {
-    const text = ctx.msg?.text;
-    if (!text) return;
-    const parts = text.split(' ');
-    if (parts.length < 2) return ctx.reply('⚠️ /wallet 0xТВОЙ_АДРЕС');
-    const addr = parts[1];
-    if (!ethers.utils.isAddress(addr)) return ctx.reply('❌ Неверный адрес.');
+    const commandEntity = msg.entities.find(e => e.type === 'bot_command' && e.offset === 0);
+    if (!commandEntity) return next();
 
-    const chatId = ctx.chat?.id;
-    const chatType = ctx.chat?.type; // 'private', 'group', 'supergroup', 'channel'
-    const userId = ctx.from?.id;
+    const command = msg.text.slice(1, commandEntity.length).split('@')[0];
+    const args = msg.text.slice(commandEntity.length).trim().split(/\s+/);
 
-    // Личный чат
-    if (chatType === 'private') {
-        wallets[userId] = addr;
-        saveWallets();
-        return ctx.reply('✅ Ваш личный кошелёк сохранён!');
+    // ── /start ──
+    if (command === 'start') {
+        try {
+            await ctx.reply(
+                '👋 Я Bot DiRo. Сделай ДВА простых ШАГА.\n\n' +
+                'ШАГ 1. Добавь меня в администраторы твоего канала/чата, и я буду автоматически отслеживать посты и реакции!\n' +
+                'ШАГ 2. В своём(ей) канале/группе привяжи кошелёк командой:\n\n' +
+                '/wallet 0xТВОЙ_АДРЕС'
+            );
+        } catch (e) {
+            console.error('Ошибка ответа на /start:', e.message);
+        }
+        return;
     }
 
-    // Канал
-    if (chatType === 'channel') {
-        wallets[chatId] = addr;
-        saveWallets();
-        return ctx.reply(`✅ Кошелёк ${addr} сохранён для этого канала!`);
-    }
+    // ── /wallet ──
+    if (command === 'wallet') {
+        const addr = args[0];
+        if (!addr) {
+            await ctx.reply('⚠️ /wallet 0xТВОЙ_АДРЕС');
+            return;
+        }
+        if (!ethers.utils.isAddress(addr)) {
+            await ctx.reply('❌ Неверный адрес.');
+            return;
+        }
 
-    // Группа / супергруппа
-    try {
-        const admins = await ctx.api.getChatAdministrators(chatId);
-        const isAdmin = admins.some(a => a.user.id === userId);
-        if (!isAdmin) {
+        const chatId = ctx.chat?.id;
+        const chatType = ctx.chat?.type;
+        const userId = ctx.from?.id;
+
+        // Личный чат
+        if (chatType === 'private') {
             wallets[userId] = addr;
             saveWallets();
-            return ctx.reply('✅ Ваш личный кошелёк сохранён!');
+            await ctx.reply('✅ Ваш личный кошелёк сохранён!');
+            return;
         }
-    } catch (e) {
-        return ctx.reply('❌ Не удалось проверить права. Убедитесь, что бот является администратором.');
+
+        // Канал
+        if (chatType === 'channel') {
+            wallets[chatId] = addr;
+            saveWallets();
+            await ctx.reply(`✅ Кошелёк ${addr} сохранён для этого канала!`);
+            return;
+        }
+
+        // Группа / супергруппа
+        try {
+            const admins = await ctx.api.getChatAdministrators(chatId);
+            const isAdmin = admins.some(a => a.user.id === userId);
+            if (!isAdmin) {
+                wallets[userId] = addr;
+                saveWallets();
+                await ctx.reply('✅ Ваш личный кошелёк сохранён!');
+                return;
+            }
+        } catch (e) {
+            await ctx.reply('❌ Не удалось проверить права. Убедитесь, что бот является администратором.');
+            return;
+        }
+
+        wallets[chatId] = addr;
+        saveWallets();
+        await ctx.reply(`✅ Кошелёк ${addr} сохранён для этого чата!`);
+        return;
     }
 
-    wallets[chatId] = addr;
-    saveWallets();
-    await ctx.reply(`✅ Кошелёк ${addr} сохранён для этого чата!`);
+    await next();
 });
 
 // ---------- ПОКАЗАТЬ ВИДЖЕТ ----------
@@ -131,7 +160,7 @@ async function showWidget(ctx, chatId, postId, walletAddr, followers, likes, rep
     } catch (e) { console.error('Ошибка виджета:', e.message); }
 }
 
-// ---------- ОСНОВНАЯ ФУНКЦИЯ (исправлено: rewardEstimate определена до использования) ----------
+// ---------- ОСНОВНАЯ ФУНКЦИЯ ОБРАБОТКИ ПОСТА ----------
 async function handlePost(ctx, chatId, messageId, followers, likes, reposts, authorId = null) {
     let walletAddr = null;
     if (authorId && wallets[authorId]) walletAddr = wallets[authorId];
@@ -252,6 +281,7 @@ bot.on('callback_query', async (ctx) => {
     const { postId, walletAddr } = info;
     claimKeys.delete(shortKey);
 
+    // Ссылка на будущий wallet.html (замените домен на свой, когда подключите)
     const claimUrl = `https://ваш-домен.onrender.com/wallet.html?postId=${encodeURIComponent(postId)}&wallet=${walletAddr}`;
     await ctx.api.sendMessage(
         ctx.from.id,
@@ -305,6 +335,5 @@ app.listen(PORT, async () => {
     await setupWebhook();
 });
 
-// Корректное завершение
 process.once('SIGINT', () => bot.api.deleteWebhook().then(() => process.exit(0)));
 process.once('SIGTERM', () => bot.api.deleteWebhook().then(() => process.exit(0)));
