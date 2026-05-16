@@ -49,13 +49,11 @@ const claimKeys = new Map();
 const bot = new Bot(process.env.TELEGRAM_BOT_TOKEN);
 bot.catch((err) => console.error('Ошибка бота:', err.error || err));
 
-// Промежуточное логирование (только в разработке, можно убрать)
 bot.use(async (ctx, next) => {
     console.log('Получено обновление:', JSON.stringify(ctx.update, null, 2));
     await next();
 });
 
-// ---------- Команды /start и /wallet (без изменений) ----------
 bot.command('start', async (ctx) => {
     await ctx.reply(
         '👋 Я Bot DiRo. Сделай ДВА простых ШАГА.\n\n' +
@@ -96,7 +94,7 @@ bot.command('wallet', async (ctx) => {
 
 // ---------- ПОКАЗАТЬ ВИДЖЕТ ----------
 async function showWidget(ctx, chatId, postId, walletAddr, followers, likes, reposts) {
-    const rewardEstimate = Math.floor(likes * 0.5 + followers * 0.01); // вычисляем здесь
+    const rewardEstimate = Math.floor(likes * 0.5 + followers * 0.01);
     const shortKey = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     claimKeys.set(shortKey, { postId, walletAddr });
 
@@ -117,14 +115,13 @@ async function showWidget(ctx, chatId, postId, walletAddr, followers, likes, rep
     } catch (e) { console.error('Ошибка виджета:', e.message); }
 }
 
-// ---------- ОСНОВНАЯ ФУНКЦИЯ (исправлено: rewardEstimate) ----------
+// ---------- ОСНОВНАЯ ФУНКЦИЯ ----------
 async function handlePost(ctx, chatId, messageId, followers, likes, reposts, authorId = null) {
     let walletAddr = null;
     if (authorId && wallets[authorId]) walletAddr = wallets[authorId];
     if (!walletAddr) walletAddr = wallets[chatId];
     if (!walletAddr) return;
 
-    // Проверяем активность подписки
     try {
         const active = await subscription.isActive(walletAddr);
         if (!active) {
@@ -144,7 +141,6 @@ async function handlePost(ctx, chatId, messageId, followers, likes, reposts, aut
         32
     );
 
-    // Вычисляем вознаграждение (нужно и для showWidget, и для updateMined)
     const rewardEstimate = Math.floor(likes * 0.5 + followers * 0.01);
 
     await showWidget(ctx, chatId, postId, walletAddr, followers, likes, reposts);
@@ -169,7 +165,6 @@ async function handlePost(ctx, chatId, messageId, followers, likes, reposts, aut
         });
         saveRewards();
 
-        // Обновляем totalMined в GlobalMonitor (теперь rewardEstimate определён)
         try {
             await monitor.updateMined(walletAddr, rewardEstimate);
         } catch (e) { console.error('Ошибка updateMined:', e.message); }
@@ -187,7 +182,7 @@ async function handlePost(ctx, chatId, messageId, followers, likes, reposts, aut
     }
 }
 
-// ---------- ОБРАБОТЧИКИ СОБЫТИЙ (без изменений) ----------
+// ---------- ОБРАБОТЧИКИ СОБЫТИЙ ----------
 bot.on('channel_post', async (ctx) => {
     const post = ctx.channelPost;
     const chatId = post.chat.id;
@@ -255,7 +250,7 @@ bot.on('callback_query', async (ctx) => {
     }
 });
 
-// ---------- API ДЛЯ КОШЕЛЬКА (оставлено) ----------
+// ---------- API ДЛЯ КОШЕЛЬКА ----------
 app.get('/rewards/:walletAddr', (req, res) => {
     const addr = req.params.walletAddr.toLowerCase();
     res.json(rewardsDB.filter(r => r.walletAddr.toLowerCase() === addr && !r.claimed));
@@ -269,28 +264,22 @@ app.post('/mark-claimed', (req, res) => {
 });
 
 // ---------- WEBHOOK НАСТРОЙКА ----------
-const WEBHOOK_URL = process.env.WEBHOOK_URL; // https://yourapp.onrender.com/webhook
+const WEBHOOK_URL = process.env.WEBHOOK_URL;
 
-// Health-check endpoint для Render
 app.get('/health', (req, res) => res.send('OK'));
-
-// Используем встроенный webhook callback от grammY
 app.use('/webhook', webhookCallback(bot, 'express'));
 
-// Установка вебхука (делается при запуске)
 async function setupWebhook() {
     if (!WEBHOOK_URL) {
         console.error('❌ WEBHOOK_URL не задан в переменных окружения!');
         process.exit(1);
     }
     try {
-        // Удаляем старый вебхук и устанавливаем новый
         await bot.api.deleteWebhook();
         await bot.api.setWebhook(WEBHOOK_URL + '/webhook');
         console.log(`✅ Вебхук установлен: ${WEBHOOK_URL}/webhook`);
     } catch (e) {
         console.error('❌ Ошибка установки вебхука:', e.message);
-        // Можно не падать, если вебхук уже был установлен ранее (например, при рестарте)
     }
 }
 
@@ -300,6 +289,6 @@ app.listen(PORT, async () => {
     await setupWebhook();
 });
 
-// Graceful shutdown
+// Обработчики корректного завершения (без bot.start())
 process.once('SIGINT', () => bot.api.deleteWebhook().then(() => process.exit(0)));
 process.once('SIGTERM', () => bot.api.deleteWebhook().then(() => process.exit(0)));
