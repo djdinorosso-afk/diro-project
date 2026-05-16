@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Кошелёк DiRo</title>
+    <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+    <style>
+        table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        button { margin: 5px; padding: 10px; cursor: pointer; }
+        #log { background: #f9f9f9; padding: 10px; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <h1>🦖 Кошелёк DiRo</h1>
+    <button onclick="connectWallet()">Подключить кошелёк</button>
+    <span id="walletAddress" style="margin-left: 10px; font-weight: bold;"></span>
+    <hr>
+    <button onclick="loadRewards()" id="refreshBtn" disabled>Обновить список наград</button>
+    <button onclick="claimAll()" id="claimAllBtn" disabled>Забрать всё</button>
+    <div id="log"></div>
+    <table id="rewardsTable" style="display:none;">
+        <thead>
+            <tr>
+                <th>Post ID</th>
+                <th>Подписчики</th>
+                <th>Лайки</th>
+                <th>Ожидаемая награда (DiRo)</th>
+                <th>Действие</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+
+    <script>
+        const POSW_ADDRESS = '0xDaEB53334b4f15B88b3884262417dCC390FA8db1';
+        const POSW_ABI = [
+	{
+		"inputs": [
+			{ "internalType": "address", "name": "_diro", "type": "address" },
+			{ "internalType": "address", "name": "_creatorWallet", "type": "address" }
+		],
+		"stateMutability": "nonpayable",
+		"type": "constructor"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{ "indexed": true, "internalType": "address", "name": "author", "type": "address" },
+			{ "indexed": true, "internalType": "bytes32", "name": "postId", "type": "bytes32" },
+			{ "indexed": false, "internalType": "uint256", "name": "followersCount", "type": "uint256" },
+			{ "indexed": false, "internalType": "uint256", "name": "engagement", "type": "uint256" }
+		],
+		"name": "MetricsUpdated",
+		"type": "event"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{ "indexed": true, "internalType": "address", "name": "author", "type": "address" },
+			{ "indexed": true, "internalType": "bytes32", "name": "postId", "type": "bytes32" },
+			{ "indexed": false, "internalType": "uint256", "name": "reward", "type": "uint256" },
+			{ "indexed": false, "internalType": "uint256", "name": "creatorFee", "type": "uint256" }
+		],
+		"name": "RewardClaimed",
+		"type": "event"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{ "indexed": true, "internalType": "address", "name": "staker", "type": "address" },
+			{ "indexed": true, "internalType": "address", "name": "author", "type": "address" },
+			{ "indexed": true, "internalType": "bytes32", "name": "postId", "type": "bytes32" },
+			{ "indexed": false, "internalType": "uint256", "name": "amount", "type": "uint256" }
+		],
+		"name": "StakeWithdrawn",
+		"type": "event"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{ "indexed": true, "internalType": "address", "name": "staker", "type": "address" },
+			{ "indexed": true, "internalType": "address", "name": "author", "type": "address" },
+			{ "indexed": true, "internalType": "bytes32", "name": "postId", "type": "bytes32" },
+			{ "indexed": false, "internalType": "uint256", "name": "amount", "type": "uint256" }
+		],
+		"name": "Staked",
+		"type": "event"
+	},
+	{
+		"inputs": [],
+		"name": "admin",
+		"outputs": [{ "internalType": "address", "name": "", "type": "address" }],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{ "internalType": "address", "name": "", "type": "address" },
+			{ "internalType": "uint256", "name": "", "type": "uint256" }
+		],
+		"name": "authorStakes",
+		"outputs": [
+			{ "internalType": "address", "name": "staker", "type": "address" },
+			{ "internalType": "uint256", "name": "amount", "type": "uint256" },
+			{ "internalType": "uint256", "name": "timestamp", "type": "uint256" }
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{ "internalType": "uint256", "name": "_followers", "type": "uint256" },
+			{ "internalType": "uint256", "name": "engagement", "type": "uint256" }
+		],
+		"name": "calculateReward",
+		"outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+		"stateMutability": "pure",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{ "internalType": "bytes32", "name": "postId", "type": "bytes32" }
+		],
+		"name": "claimReward",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "creatorWallet",
+		"outputs": [{ "internalType": "address", "name": "", "type": "address" }],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "diro",
+		"outputs": [{ "internalType": "contract DiRo", "name": "", "type": "address" }],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [{ "internalType": "address", "name": "", "type": "address" }],
+		"name": "followers",
+		"outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [{ "internalType": "bytes32", "name": "", "type": "bytes32" }],
+		"name": "postEngagement",
+		"outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{ "internalType": "bytes32", "name": "", "type": "bytes32" },
+			{ "internalType": "uint256", "name": "", "type": "uint256" }
+		],
+		"name": "postStakes",
+		"outputs": [
+			{ "internalType": "address", "name": "staker", "type": "address" },
+			{ "internalType": "uint256", "name": "amount", "type": "uint256" },
+			{ "internalType": "uint256", "name": "timestamp", "type": "uint256" }
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "protocolFeePercent",
+		"outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "registry",
+		"outputs": [{ "internalType": "address", "name": "", "type": "address" }],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [{ "internalType": "bytes32", "name": "", "type": "bytes32" }],
+		"name": "rewardClaimed",
+		"outputs": [{ "internalType": "bool", "name": "", "type": "bool" }],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [{ "internalType": "address", "name": "_registry", "type": "address" }],
+		"name": "setRegistry",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{ "internalType": "address", "name": "author", "type": "address" },
+			{ "internalType": "uint256", "name": "amount", "type": "uint256" }
+		],
+		"name": "stakeForAuthor",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [{ "internalType": "bytes32", "name": "", "type": "bytes32" }],
+		"name": "totalStaked",
+		"outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [{ "internalType": "address", "name": "", "type": "address" }],
+		"name": "totalStakedByAuthor",
+		"outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{ "internalType": "address", "name": "author", "type": "address" },
+			{ "internalType": "bytes32", "name": "postId", "type": "bytes32" },
+			{ "internalType": "uint256", "name": "_followers", "type": "uint256" },
+			{ "internalType": "uint256", "name": "_likes", "type": "uint256" },
+			{ "internalType": "uint256", "name": "_reposts", "type": "uint256" }
+		],
+		"name": "updateMetrics",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [{ "internalType": "address", "name": "author", "type": "address" }],
+		"name": "withdrawStake",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	}
+];
+
+        let signer, userAddress, posw;
+        const POLYGON_CHAIN_ID = '0x89'; // 137 в hex
+
+        async function connectWallet() {
+            if (!window.ethereum) {
+                document.getElementById('log').innerText = '❌ Установите MetaMask и обновите страницу.';
+                return;
+            }
+            try {
+                await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: POLYGON_CHAIN_ID }] });
+            } catch (switchError) {
+                if (switchError.code === 4902) {
+                    try {
+                        await window.ethereum.request({
+                            method: 'wallet_addEthereumChain',
+                            params: [{
+                                chainId: POLYGON_CHAIN_ID,
+                                chainName: 'Polygon Mainnet',
+                                nativeCurrency: { name: 'POL', symbol: 'POL', decimals: 18 },
+                                rpcUrls: ['https://polygon-rpc.com'],
+                                blockExplorerUrls: ['https://polygonscan.com/']
+                            }]
+                        });
+                    } catch (addError) {
+                        document.getElementById('log').innerText = '❌ Не удалось добавить сеть Polygon: ' + addError.message;
+                        return;
+                    }
+                }
+            }
+            try {
+                const provider = new ethers.providers.Web3Provider(window.ethereum);
+                await provider.send('eth_requestAccounts', []);
+                signer = provider.getSigner();
+                userAddress = await signer.getAddress();
+                document.getElementById('walletAddress').innerText = userAddress;
+                posw = new ethers.Contract(POSW_ADDRESS, POSW_ABI, signer);
+                document.getElementById('refreshBtn').disabled = false;
+                document.getElementById('claimAllBtn').disabled = false;
+                document.getElementById('log').innerText = '✅ Кошелёк подключён. Загружаю награды...';
+                loadRewards(); // автоматически загружаем награды
+            } catch (e) {
+                document.getElementById('log').innerText = '❌ Ошибка подключения: ' + e.message;
+            }
+        }
+
+        async function loadRewards() {
+            if (!userAddress) { alert('Сначала подключите кошелёк'); return; }
+            const log = document.getElementById('log');
+            log.innerText = 'Загружаю награды из базы сервера...';
+            try {
+                const response = await fetch(`/rewards/${userAddress}`);
+                if (!response.ok) throw new Error('Сервер недоступен');
+                const rewards = await response.json();
+                renderRewards(rewards);
+                log.innerText = `Загружено ${rewards.length} наград из базы сервера.`;
+            } catch (e) {
+                log.innerText = 'Ошибка: ' + e.message + '. Убедитесь, что сервер запущен.';
+            }
+        }
+
+        function renderRewards(rewards) {
+            const tbody = document.querySelector('#rewardsTable tbody');
+            tbody.innerHTML = '';
+            if (!rewards || rewards.length === 0) {
+                document.getElementById('rewardsTable').style.display = 'none';
+                return;
+            }
+            rewards.forEach(r => {
+                const engagement = parseInt(r.likes) + parseInt(r.reposts);
+                const followers = parseInt(r.followers);
+                let rewardEstimate = 0;
+                if (engagement > 0 && followers >= 0) {
+                    rewardEstimate = Math.floor(Math.sqrt(engagement * 1e18) * Math.log2(1 + followers) / 1e9) / 1e18;
+                }
+                // Показываем первые 20 символов postId + троеточие, полный виден при наведении
+                const shortId = r.postId.slice(0, 20) + '...';
+                const row = `<tr>
+                    <td title="${r.postId}">${shortId}</td>
+                    <td>${r.followers}</td>
+                    <td>${r.likes}</td>
+                    <td>${rewardEstimate.toFixed(4)} DiRo</td>
+                    <td><button onclick="claimOne('${r.postId}')">Забрать</button></td>
+                </tr>`;
+                tbody.innerHTML += row;
+            });
+            document.getElementById('rewardsTable').style.display = 'table';
+        }
+
+        async function claimOne(postId) {
+            if (!posw) return alert('Подключите кошелёк');
+            try {
+                document.getElementById('log').innerText = `Клеймлю ${postId}...`;
+                const tx = await posw.claimReward(postId, { gasLimit: 300000 });
+                await tx.wait();
+                document.getElementById('log').innerText = '✅ Награда получена!';
+                await fetch('/mark-claimed', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ postId }) });
+                loadRewards();
+            } catch (e) {
+                document.getElementById('log').innerText = '❌ ' + e.message;
+            }
+        }
+
+        async function claimAll() {
+            if (!posw) return alert('Подключите кошелёк');
+            const buttons = document.querySelectorAll('#rewardsTable tbody button');
+            let success = 0;
+            for (const btn of buttons) {
+                const postId = btn.getAttribute('onclick').split("'")[1];
+                try {
+                    const tx = await posw.claimReward(postId, { gasLimit: 300000 });
+                    await tx.wait();
+                    success++;
+                    await fetch('/mark-claimed', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ postId }) });
+                } catch (e) { console.error(postId, e); }
+            }
+            document.getElementById('log').innerText = `Заклеймлено ${success} из ${buttons.length} наград.`;
+            loadRewards();
+        }
+    </script>
+</body>
+</html>

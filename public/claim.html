@@ -1,0 +1,51 @@
+html
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>DiRo Claim</title>
+    <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+</head>
+<body>
+    <h1>🦖 DiRo — Забрать награду</h1>
+    <button onclick="claim()" id="btn" style="font-size:18px; padding:10px;">Забрать награду</button>
+    <pre id="log"></pre>
+
+    <script>
+        const POSW_ADDRESS = '0xDaEB53334b4f15B88b3884262417dCC390FA8db1';
+        const POSW_ABI = [ /* ВСТАВЬТЕ ABI DiRoPoSW */ ];
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const postId = urlParams.get('postId');
+        const walletAddr = urlParams.get('wallet');
+
+        let provider, signer, posw;
+
+        async function connectWallet() {
+            if (!window.ethereum) return alert('Установите MetaMask или Rabby');
+            provider = new ethers.providers.Web3Provider(window.ethereum);
+            await provider.send('eth_requestAccounts', []);
+            signer = provider.getSigner();
+            posw = new ethers.Contract(POSW_ADDRESS, POSW_ABI, signer);
+        }
+
+        async function claim() {
+            if (!postId || !walletAddr) {
+                document.getElementById('log').textContent = '❌ Нет данных postId или wallet.';
+                return;
+            }
+            if (!posw) await connectWallet();
+            try {
+                document.getElementById('log').textContent = 'Отправляю транзакцию...';
+                const tx = await posw.claimReward(postId, { gasLimit: 300000 });
+                document.getElementById('log').textContent = 'Жду подтверждения...';
+                await tx.wait();
+                document.getElementById('log').textContent = '✅ Награда получена! TX: ' + tx.hash;
+                document.getElementById('btn').disabled = true;
+            } catch (e) {
+                document.getElementById('log').textContent = '❌ ' + e.message;
+            }
+        }
+    </script>
+</body>
+</html>

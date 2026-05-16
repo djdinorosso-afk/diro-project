@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DiRo — Подписки</title>
+    <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+    <style>
+        body { font-family: Arial; max-width: 800px; margin: auto; padding: 20px; background: #0a0a0a; color: #fff; }
+        .plans { display: flex; flex-wrap: wrap; gap: 20px; }
+        .card { background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 20px; flex: 1 1 200px; text-align: center; }
+        .card h3 { color: #F5A623; }
+        button { background: #F5A623; color: #000; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: bold; }
+        button:hover { background: #cc8a1a; }
+    </style>
+</head>
+<body>
+    <h1>🦖 DiRo Subscription</h1>
+    <div class="plans" id="plans"></div>
+    <div id="status"></div>
+
+    <script>
+        const SUBSCRIPTION_ADDRESS = '0x9b4D51EAd15518496D3466E102cdC69878Bcd86f'; // ваш адрес контракта DiRoSubscription
+        const DIRO_ADDRESS = '0x5D1B6B802401866EE9B613B5f495F9eFb1017649';
+        const SUBSCRIPTION_ABI = [
+            "function subscribe(uint256 planId) external",
+            "function pricesDiRo(uint256) view returns (uint256)",
+            "function pricesUSDT(uint256) view returns (uint256)",
+            "function durations(uint256) view returns (uint256)",
+            "function isActive(address) view returns (bool)"
+        ];
+        let provider, signer, contract, userAddress;
+
+        async function connect() {
+            if (!window.ethereum) return alert('Установите MetaMask');
+            provider = new ethers.providers.Web3Provider(window.ethereum);
+            await provider.send('eth_requestAccounts', []);
+            signer = provider.getSigner();
+            userAddress = await signer.getAddress();
+            contract = new ethers.Contract(SUBSCRIPTION_ADDRESS, SUBSCRIPTION_ABI, signer);
+            loadPlans();
+        }
+
+        async function loadPlans() {
+            const plansDiv = document.getElementById('plans');
+            plansDiv.innerHTML = '';
+            for (let i = 0; i < 4; i++) {
+                const priceDiRo = ethers.utils.formatEther(await contract.pricesDiRo(i));
+                const priceUSDT = (await contract.pricesUSDT(i)) / 100;
+                const duration = await contract.durations(i);
+                plansDiv.innerHTML += `
+                    <div class="card">
+                        <h3>${duration} дней</h3>
+                        <p>${priceDiRo} DiRo</p>
+                        <p>~$${priceUSDT} (USDT)</p>
+                        <button onclick="subscribe(${i})">Оплатить DiRo</button>
+                    </div>`;
+            }
+        }
+
+        async function subscribe(planId) {
+            if (!contract) await connect();
+            try {
+                const price = await contract.pricesDiRo(planId);
+                const diroContract = new ethers.Contract(DIRO_ADDRESS, [
+                    "function approve(address spender, uint256 amount) external returns (bool)"
+                ], signer);
+                // approve
+                const approveTx = await diroContract.approve(SUBSCRIPTION_ADDRESS, price);
+                await approveTx.wait();
+                // subscribe
+                const tx = await contract.subscribe(planId);
+                await tx.wait();
+                document.getElementById('status').innerText = '✅ Подписка активирована!';
+            } catch (e) {
+                document.getElementById('status').innerText = '❌ Ошибка: ' + e.message;
+            }
+        }
+
+        // Автоподключение при загрузке
+        window.onload = connect;
+    </script>
+</body>
+</html>
