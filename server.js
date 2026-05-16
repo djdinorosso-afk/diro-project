@@ -63,6 +63,7 @@ bot.command('start', async (ctx) => {
     );
 });
 
+// ---------- Команда /wallet с поддержкой каналов ----------
 bot.command('wallet', async (ctx) => {
     const text = ctx.msg?.text;
     if (!text) return;
@@ -70,21 +71,36 @@ bot.command('wallet', async (ctx) => {
     if (parts.length < 2) return ctx.reply('⚠️ /wallet 0xТВОЙ_АДРЕС');
     const addr = parts[1];
     if (!ethers.utils.isAddress(addr)) return ctx.reply('❌ Неверный адрес.');
+
     const chatId = ctx.chat?.id;
+    const chatType = ctx.chat?.type; // 'private', 'group', 'supergroup', 'channel'
     const userId = ctx.from?.id;
 
-    if (chatId !== userId) {
-        try {
-            const admins = await ctx.api.getChatAdministrators(chatId);
-            const isAdmin = admins.some(a => a.user.id === userId);
-            if (!isAdmin) {
-                wallets[userId] = addr;
-                saveWallets();
-                return ctx.reply('✅ Ваш личный кошелёк сохранён!');
-            }
-        } catch (e) {
-            return ctx.reply('❌ Не удалось проверить права. Убедитесь, что бот является администратором.');
+    // Личный чат
+    if (chatType === 'private') {
+        wallets[userId] = addr;
+        saveWallets();
+        return ctx.reply('✅ Ваш личный кошелёк сохранён!');
+    }
+
+    // Канал
+    if (chatType === 'channel') {
+        wallets[chatId] = addr;
+        saveWallets();
+        return ctx.reply(`✅ Кошелёк ${addr} сохранён для этого канала!`);
+    }
+
+    // Группа / супергруппа
+    try {
+        const admins = await ctx.api.getChatAdministrators(chatId);
+        const isAdmin = admins.some(a => a.user.id === userId);
+        if (!isAdmin) {
+            wallets[userId] = addr;
+            saveWallets();
+            return ctx.reply('✅ Ваш личный кошелёк сохранён!');
         }
+    } catch (e) {
+        return ctx.reply('❌ Не удалось проверить права. Убедитесь, что бот является администратором.');
     }
 
     wallets[chatId] = addr;
@@ -115,7 +131,7 @@ async function showWidget(ctx, chatId, postId, walletAddr, followers, likes, rep
     } catch (e) { console.error('Ошибка виджета:', e.message); }
 }
 
-// ---------- ОСНОВНАЯ ФУНКЦИЯ ----------
+// ---------- ОСНОВНАЯ ФУНКЦИЯ (исправлено: rewardEstimate определена до использования) ----------
 async function handlePost(ctx, chatId, messageId, followers, likes, reposts, authorId = null) {
     let walletAddr = null;
     if (authorId && wallets[authorId]) walletAddr = wallets[authorId];
@@ -289,6 +305,6 @@ app.listen(PORT, async () => {
     await setupWebhook();
 });
 
-// Обработчики корректного завершения (без bot.start())
+// Корректное завершение
 process.once('SIGINT', () => bot.api.deleteWebhook().then(() => process.exit(0)));
 process.once('SIGTERM', () => bot.api.deleteWebhook().then(() => process.exit(0)));
