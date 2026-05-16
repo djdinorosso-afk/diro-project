@@ -133,18 +133,18 @@ async function handlePost(ctx, chatId, messageId, followers, likes, reposts, aut
     if (!walletAddr) return;
 
     // Проверяем активность подписки
-    try {
-        const active = await subscription.isActive(walletAddr);
-        if (!active) {
-            await ctx.api.sendMessage(authorId || chatId,
-                '❌ Ваша подписка не активна. Приобретите подписку на сайте.'
-            );
-            return;
-        }
-    } catch (e) {
-        console.error('Ошибка проверки подписки:', e.message);
-        return;
-    }
+    //try {
+    //    const active = await subscription.isActive(walletAddr);
+    //    if (!active) {
+    //        await ctx.api.sendMessage(authorId || chatId,
+    //            '❌ Ваша подписка не активна. Приобретите подписку на сайте.'
+    //        );
+    //        return;
+    //    }
+    //} catch (e) {
+    //    console.error('Ошибка проверки подписки:', e.message);
+    //    return;
+    //}
 
     // Проверяем дневной лимит (упрощённо – по числу наград за сегодня)
     // В реальном проекте нужно проверять totalMined на контракте GlobalMonitor
