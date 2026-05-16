@@ -302,4 +302,4 @@ app.listen(PORT, async () => {
 
 // Graceful shutdown
 process.once('SIGINT', () => bot.api.deleteWebhook().then(() => process.exit(0)));
-process.once('SIGTERM', () => bot.api.deleteWebhook().then(() => process.exit(0));
+process.once('SIGTERM', () => bot.api.deleteWebhook().then(() => process.exit(0)));
