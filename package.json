@@ -1,0 +1,16 @@
+{
+  "name": "diro-telegram-oracle",
+  "version": "1.0.0",
+  "description": "DiRo Telegram Oracle bot with subscriptions",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "ethers": "^5.7.2",
+    "express": "^4.21.1",
+    "grammy": "^1.34.1"
+  }
+}
