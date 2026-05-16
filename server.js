@@ -14,21 +14,10 @@ app.use(express.static(path.join(__dirname, 'public')));
 // ---------- БЛОКЧЕЙН ----------
 const provider = new ethers.providers.JsonRpcProvider(process.env.RPC_URL);
 const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
-
-// ABI и адреса
 const REGISTRY_ABI = [
     "function submitMetrics(address author, bytes32 postId, uint256 followers, uint256 likes, uint256 reposts) external"
 ];
-const SUBSCRIPTION_ABI = [
-    "function isActive(address user) view returns (bool)"
-];
-const MONITOR_ABI = [
-    "function updateMined(address user, uint256 amount) external"
-];
-
 const registry = new ethers.Contract(process.env.REGISTRY_ADDRESS, REGISTRY_ABI, wallet);
-const subscription = new ethers.Contract(process.env.SUBSCRIPTION_ADDRESS, SUBSCRIPTION_ABI, wallet);
-const monitor = new ethers.Contract(process.env.MONITOR_ADDRESS, MONITOR_ABI, wallet);
 
 // ---------- ХРАНЕНИЕ КОШЕЛЬКОВ ----------
 const WALLETS_FILE = path.join(__dirname, 'wallets.json');
@@ -42,18 +31,9 @@ let rewardsDB = [];
 try { if (fs.existsSync(REWARDS_FILE)) rewardsDB = JSON.parse(fs.readFileSync(REWARDS_FILE, 'utf8')); } catch (e) {}
 function saveRewards() { fs.writeFileSync(REWARDS_FILE, JSON.stringify(rewardsDB, null, 2)); }
 
-// ---------- ВИДЖЕТЫ ----------
+// ---------- ВИДЖЕТЫ И КЛЮЧИ КНОПОК ----------
 const widgetMsgs = {};
 const claimKeys = new Map();
-
-// ---------- ЛИМИТЫ (базовые) ----------
-const DAILY_LIMITS = {
-    free: 5,      // без подписки
-    '30': 20,
-    '90': 100,
-    '180': 200,
-    '365': 500
-};
 
 // ---------- TELEGRAM БОТ ----------
 const bot = new Bot(process.env.TELEGRAM_BOT_TOKEN);
@@ -81,22 +61,6 @@ bot.command('wallet', async (ctx) => {
     const addr = parts[1];
     if (!ethers.utils.isAddress(addr)) return ctx.reply('❌ Неверный адрес.');
     const chatId = ctx.chat?.id;
-    const userId = ctx.from?.id;
-
-    if (chatId !== userId) {
-        try {
-            const admins = await ctx.api.getChatAdministrators(chatId);
-            const isAdmin = admins.some(a => a.user.id === userId);
-            if (!isAdmin) {
-                wallets[userId] = addr; // личный кошелёк участника
-                saveWallets();
-                return ctx.reply('✅ Ваш личный кошелёк сохранён!');
-            }
-        } catch (e) {
-            return ctx.reply('❌ Не удалось проверить права. Убедитесь, что бот является администратором.');
-        }
-    }
-
     wallets[chatId] = addr;
     saveWallets();
     await ctx.reply(`✅ Кошелёк ${addr} сохранён для этого чата!`);
@@ -125,30 +89,15 @@ async function showWidget(ctx, chatId, postId, walletAddr, followers, likes, rep
     } catch (e) { console.error('Ошибка виджета:', e.message); }
 }
 
-// ---------- ОСНОВНАЯ ФУНКЦИЯ (с проверкой подписки и лимитов) ----------
+// ---------- ОСНОВНАЯ ФУНКЦИЯ (без проверки подписки) ----------
 async function handlePost(ctx, chatId, messageId, followers, likes, reposts, authorId = null) {
     let walletAddr = null;
     if (authorId && wallets[authorId]) walletAddr = wallets[authorId];
     if (!walletAddr) walletAddr = wallets[chatId];
-    if (!walletAddr) return;
-
-    // Проверяем активность подписки
-    //try {
-    //    const active = await subscription.isActive(walletAddr);
-    //    if (!active) {
-    //        await ctx.api.sendMessage(authorId || chatId,
-    //            '❌ Ваша подписка не активна. Приобретите подписку на сайте.'
-    //        );
-    //        return;
-    //    }
-    //} catch (e) {
-    //    console.error('Ошибка проверки подписки:', e.message);
-    //    return;
-    //}
-
-    // Проверяем дневной лимит (упрощённо – по числу наград за сегодня)
-    // В реальном проекте нужно проверять totalMined на контракте GlobalMonitor
-    // Здесь для простоты пропускаем
+    if (!walletAddr) {
+        console.log('❌ Кошелёк не привязан к chatId:', chatId);
+        return;
+    }
 
     const rawPostId = `${chatId}_${messageId}`;
     const postId = ethers.utils.hexZeroPad(
@@ -156,8 +105,10 @@ async function handlePost(ctx, chatId, messageId, followers, likes, reposts, aut
         32
     );
 
+    // Сразу показываем виджет
     await showWidget(ctx, chatId, postId, walletAddr, followers, likes, reposts);
 
+    // Проверяем, не сохранена ли уже награда для этого postId
     if (rewardsDB.some(r => r.postId === postId)) {
         console.log('⏭️  Награда уже сохранена для', postId);
         return;
@@ -177,11 +128,6 @@ async function handlePost(ctx, chatId, messageId, followers, likes, reposts, aut
             timestamp: Date.now(), claimed: false, pending: true
         });
         saveRewards();
-
-        // Обновляем totalMined в GlobalMonitor
-        try {
-            await monitor.updateMined(walletAddr, rewardEstimate);
-        } catch (e) { console.error('Ошибка updateMined:', e.message); }
 
         tx.wait().then(() => {
             const idx = rewardsDB.findIndex(r => r.postId === postId);
@@ -236,7 +182,7 @@ bot.on('message', async (ctx) => {
     await handlePost(ctx, msg.chat.id, msg.message_id, followers, 0, 0, authorId);
 });
 
-// ---------- КНОПКА "ЗАБРАТЬ НАГРАДУ" ----------
+// ---------- КНОПКА "ЗАБРАТЬ НАГРАДУ" (с удалением виджета) ----------
 bot.on('callback_query', async (ctx) => {
     const data = ctx.callbackQuery?.data;
     if (!data?.startsWith('claim_')) return;
@@ -250,7 +196,7 @@ bot.on('callback_query', async (ctx) => {
     const { postId, walletAddr } = info;
     claimKeys.delete(shortKey);
 
-    const claimUrl = `https://ваш-домен.onrender.com/wallet.html?postId=${encodeURIComponent(postId)}&wallet=${walletAddr}`;
+    const claimUrl = `https://diro-project.onrender.com/wallet.html?postId=${encodeURIComponent(postId)}&wallet=${walletAddr}`;
     await ctx.api.sendMessage(
         ctx.from.id,
         `🦖 Чтобы забрать награду, откройте эту ссылку в браузере:\n${claimUrl}`
