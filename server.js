@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express = require('express');
-const { Bot } = require('grammy');
+const { Bot, webhookCallback } = require('grammy');
 const { ethers } = require('ethers');
 const cors = require('cors');
 const fs = require('fs');
@@ -14,10 +14,20 @@ app.use(express.static(path.join(__dirname, 'public')));
 // ---------- БЛОКЧЕЙН ----------
 const provider = new ethers.providers.JsonRpcProvider(process.env.RPC_URL);
 const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+
 const REGISTRY_ABI = [
     "function submitMetrics(address author, bytes32 postId, uint256 followers, uint256 likes, uint256 reposts) external"
 ];
+const SUBSCRIPTION_ABI = [
+    "function isActive(address user) view returns (bool)"
+];
+const MONITOR_ABI = [
+    "function updateMined(address user, uint256 amount) external"
+];
+
 const registry = new ethers.Contract(process.env.REGISTRY_ADDRESS, REGISTRY_ABI, wallet);
+const subscription = new ethers.Contract(process.env.SUBSCRIPTION_ADDRESS, SUBSCRIPTION_ABI, wallet);
+const monitor = new ethers.Contract(process.env.MONITOR_ADDRESS, MONITOR_ABI, wallet);
 
 // ---------- ХРАНЕНИЕ КОШЕЛЬКОВ ----------
 const WALLETS_FILE = path.join(__dirname, 'wallets.json');
@@ -31,19 +41,21 @@ let rewardsDB = [];
 try { if (fs.existsSync(REWARDS_FILE)) rewardsDB = JSON.parse(fs.readFileSync(REWARDS_FILE, 'utf8')); } catch (e) {}
 function saveRewards() { fs.writeFileSync(REWARDS_FILE, JSON.stringify(rewardsDB, null, 2)); }
 
-// ---------- ВИДЖЕТЫ И КЛЮЧИ КНОПОК ----------
+// ---------- ВИДЖЕТЫ ----------
 const widgetMsgs = {};
 const claimKeys = new Map();
 
-// ---------- TELEGRAM БОТ ----------
+// ---------- Telegram бот ----------
 const bot = new Bot(process.env.TELEGRAM_BOT_TOKEN);
 bot.catch((err) => console.error('Ошибка бота:', err.error || err));
 
+// Промежуточное логирование (только в разработке, можно убрать)
 bot.use(async (ctx, next) => {
     console.log('Получено обновление:', JSON.stringify(ctx.update, null, 2));
     await next();
 });
 
+// ---------- Команды /start и /wallet (без изменений) ----------
 bot.command('start', async (ctx) => {
     await ctx.reply(
         '👋 Я Bot DiRo. Сделай ДВА простых ШАГА.\n\n' +
@@ -61,6 +73,22 @@ bot.command('wallet', async (ctx) => {
     const addr = parts[1];
     if (!ethers.utils.isAddress(addr)) return ctx.reply('❌ Неверный адрес.');
     const chatId = ctx.chat?.id;
+    const userId = ctx.from?.id;
+
+    if (chatId !== userId) {
+        try {
+            const admins = await ctx.api.getChatAdministrators(chatId);
+            const isAdmin = admins.some(a => a.user.id === userId);
+            if (!isAdmin) {
+                wallets[userId] = addr;
+                saveWallets();
+                return ctx.reply('✅ Ваш личный кошелёк сохранён!');
+            }
+        } catch (e) {
+            return ctx.reply('❌ Не удалось проверить права. Убедитесь, что бот является администратором.');
+        }
+    }
+
     wallets[chatId] = addr;
     saveWallets();
     await ctx.reply(`✅ Кошелёк ${addr} сохранён для этого чата!`);
@@ -68,7 +96,7 @@ bot.command('wallet', async (ctx) => {
 
 // ---------- ПОКАЗАТЬ ВИДЖЕТ ----------
 async function showWidget(ctx, chatId, postId, walletAddr, followers, likes, reposts) {
-    const rewardEstimate = Math.floor(likes * 0.5 + followers * 0.01);
+    const rewardEstimate = Math.floor(likes * 0.5 + followers * 0.01); // вычисляем здесь
     const shortKey = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     claimKeys.set(shortKey, { postId, walletAddr });
 
@@ -89,13 +117,24 @@ async function showWidget(ctx, chatId, postId, walletAddr, followers, likes, rep
     } catch (e) { console.error('Ошибка виджета:', e.message); }
 }
 
-// ---------- ОСНОВНАЯ ФУНКЦИЯ (без проверки подписки) ----------
+// ---------- ОСНОВНАЯ ФУНКЦИЯ (исправлено: rewardEstimate) ----------
 async function handlePost(ctx, chatId, messageId, followers, likes, reposts, authorId = null) {
     let walletAddr = null;
     if (authorId && wallets[authorId]) walletAddr = wallets[authorId];
     if (!walletAddr) walletAddr = wallets[chatId];
-    if (!walletAddr) {
-        console.log('❌ Кошелёк не привязан к chatId:', chatId);
+    if (!walletAddr) return;
+
+    // Проверяем активность подписки
+    try {
+        const active = await subscription.isActive(walletAddr);
+        if (!active) {
+            await ctx.api.sendMessage(authorId || chatId,
+                '❌ Ваша подписка не активна. Приобретите подписку на сайте.'
+            );
+            return;
+        }
+    } catch (e) {
+        console.error('Ошибка проверки подписки:', e.message);
         return;
     }
 
@@ -105,10 +144,11 @@ async function handlePost(ctx, chatId, messageId, followers, likes, reposts, aut
         32
     );
 
-    // Сразу показываем виджет
+    // Вычисляем вознаграждение (нужно и для showWidget, и для updateMined)
+    const rewardEstimate = Math.floor(likes * 0.5 + followers * 0.01);
+
     await showWidget(ctx, chatId, postId, walletAddr, followers, likes, reposts);
 
-    // Проверяем, не сохранена ли уже награда для этого postId
     if (rewardsDB.some(r => r.postId === postId)) {
         console.log('⏭️  Награда уже сохранена для', postId);
         return;
@@ -129,6 +169,11 @@ async function handlePost(ctx, chatId, messageId, followers, likes, reposts, aut
         });
         saveRewards();
 
+        // Обновляем totalMined в GlobalMonitor (теперь rewardEstimate определён)
+        try {
+            await monitor.updateMined(walletAddr, rewardEstimate);
+        } catch (e) { console.error('Ошибка updateMined:', e.message); }
+
         tx.wait().then(() => {
             const idx = rewardsDB.findIndex(r => r.postId === postId);
             if (idx !== -1) {
@@ -142,7 +187,7 @@ async function handlePost(ctx, chatId, messageId, followers, likes, reposts, aut
     }
 }
 
-// ---------- ОБРАБОТЧИКИ ----------
+// ---------- ОБРАБОТЧИКИ СОБЫТИЙ (без изменений) ----------
 bot.on('channel_post', async (ctx) => {
     const post = ctx.channelPost;
     const chatId = post.chat.id;
@@ -182,7 +227,7 @@ bot.on('message', async (ctx) => {
     await handlePost(ctx, msg.chat.id, msg.message_id, followers, 0, 0, authorId);
 });
 
-// ---------- КНОПКА "ЗАБРАТЬ НАГРАДУ" (с удалением виджета) ----------
+// ---------- КНОПКА "ЗАБРАТЬ НАГРАДУ" ----------
 bot.on('callback_query', async (ctx) => {
     const data = ctx.callbackQuery?.data;
     if (!data?.startsWith('claim_')) return;
@@ -196,7 +241,7 @@ bot.on('callback_query', async (ctx) => {
     const { postId, walletAddr } = info;
     claimKeys.delete(shortKey);
 
-    const claimUrl = `https://diro-project.onrender.com/wallet.html?postId=${encodeURIComponent(postId)}&wallet=${walletAddr}`;
+    const claimUrl = `https://ваш-домен.onrender.com/wallet.html?postId=${encodeURIComponent(postId)}&wallet=${walletAddr}`;
     await ctx.api.sendMessage(
         ctx.from.id,
         `🦖 Чтобы забрать награду, откройте эту ссылку в браузере:\n${claimUrl}`
@@ -210,7 +255,7 @@ bot.on('callback_query', async (ctx) => {
     }
 });
 
-// ---------- API КОШЕЛЬКА ----------
+// ---------- API ДЛЯ КОШЕЛЬКА (оставлено) ----------
 app.get('/rewards/:walletAddr', (req, res) => {
     const addr = req.params.walletAddr.toLowerCase();
     res.json(rewardsDB.filter(r => r.walletAddr.toLowerCase() === addr && !r.claimed));
@@ -223,11 +268,38 @@ app.post('/mark-claimed', (req, res) => {
     else { res.status(404).json({ error: 'Not found' }); }
 });
 
-// ---------- СТАРТ ----------
-app.get('/', (req, res) => res.send('DiRo Telegram Oracle работает'));
+// ---------- WEBHOOK НАСТРОЙКА ----------
+const WEBHOOK_URL = process.env.WEBHOOK_URL; // https://yourapp.onrender.com/webhook
+
+// Health-check endpoint для Render
+app.get('/health', (req, res) => res.send('OK'));
+
+// Используем встроенный webhook callback от grammY
+app.use('/webhook', webhookCallback(bot, 'express'));
+
+// Установка вебхука (делается при запуске)
+async function setupWebhook() {
+    if (!WEBHOOK_URL) {
+        console.error('❌ WEBHOOK_URL не задан в переменных окружения!');
+        process.exit(1);
+    }
+    try {
+        // Удаляем старый вебхук и устанавливаем новый
+        await bot.api.deleteWebhook();
+        await bot.api.setWebhook(WEBHOOK_URL + '/webhook');
+        console.log(`✅ Вебхук установлен: ${WEBHOOK_URL}/webhook`);
+    } catch (e) {
+        console.error('❌ Ошибка установки вебхука:', e.message);
+        // Можно не падать, если вебхук уже был установлен ранее (например, при рестарте)
+    }
+}
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
     console.log(`🚀 Сервер запущен на порту ${PORT}`);
-    bot.start();
+    await setupWebhook();
 });
+
+// Graceful shutdown
+process.once('SIGINT', () => bot.api.deleteWebhook().then(() => process.exit(0)));
+process.once('SIGTERM', () => bot.api.deleteWebhook().then(() => process.exit(0));
