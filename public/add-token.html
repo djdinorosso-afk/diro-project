@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' https:; object-src 'none'; base-uri 'self'" />
   <title>Добавить DiRo в кошелёк</title>
   <style>
     body { font-family: Inter, Arial, sans-serif; background: #1A1A1A; color: #F5F5F5; max-width: 420px; margin: 40px auto; padding: 24px; text-align: center; }
@@ -12,47 +13,12 @@
   </style>
 </head>
 <body>
-  <img class="coin" src="/logo.png" alt="DiRo" />
+  <img class="coin" src="logo.png" alt="DiRo" />
   <h1>DiRo</h1>
   <p>Dino Rosso · Polygon</p>
   <p><code>0x5D1B6B802401866EE9B613B5f495F9eFb1017649</code></p>
   <button type="button" id="add">Добавить в MetaMask / Rabby</button>
   <p id="status"></p>
-  <script>
-    const TOKEN = {
-      address: '0x5D1B6B802401866EE9B613B5f495F9eFb1017649',
-      symbol: 'DiRo',
-      decimals: 18,
-      image: new URL('/logo.png', window.location.origin).href
-    };
-    document.getElementById('add').onclick = async () => {
-      const el = document.getElementById('status');
-      if (!window.ethereum) {
-        el.textContent = 'Откройте MetaMask или Rabby в этом браузере.';
-        return;
-      }
-      try {
-        await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x89' }] });
-      } catch (e) {
-        if (e.code === 4902) {
-          await window.ethereum.request({
-            method: 'wallet_addEthereumChain',
-            params: [{
-              chainId: '0x89',
-              chainName: 'Polygon Mainnet',
-              nativeCurrency: { name: 'POL', symbol: 'POL', decimals: 18 },
-              rpcUrls: ['https://polygon-rpc.com'],
-              blockExplorerUrls: ['https://polygonscan.com/']
-            }]
-          });
-        }
-      }
-      const ok = await window.ethereum.request({
-        method: 'wallet_watchAsset',
-        params: { type: 'ERC20', options: TOKEN }
-      });
-      el.textContent = ok ? 'Токен добавлен. Проверьте список активов.' : 'Добавление отменено.';
-    };
-  </script>
+  <script src="add-token.js"></script>
 </body>
 </html>
